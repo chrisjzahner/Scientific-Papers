@@ -1,15 +1,11 @@
-# Platelet wastage simulation — corrected 3-day vs 5-day usable shelf-life model
-# Final analysis version corresponding to corrected Figures 1–5 and Tables 1–5.
+# Platelet wastage model, final corrected run (3 usable days vs 5).
 #
-# Core definitions
-# - Wastage = expired/outdated units / units received
-# - Shortage day = a day when demand exceeds locally available inventory
-# - Service levels 99%, 98%, 96% correspond to <=1%, <=2%, <=4% shortage days
-# - Baseline = 3 usable days remaining at hospital receipt
-# - Shelf-life intervention = 5 usable days remaining at hospital receipt
-# - Redistribution is modeled as LOCAL ACCOUNTING ONLY:
-#   a successfully redistributed unit is removed from source inventory and counted as saved;
-#   recipient-side inventory, demand, transfusion, and downstream wastage are not modeled.
+# Wastage is expired units / units received.
+# A shortage day is demand greater than inventory on hand.
+# Service of 99/98/96% means shortage days held to 1/2/4%.
+# Baseline is 3 usable days left at receipt; the shelf-life run is 5.
+# Redistribution is source-side only. A saved unit leaves the sending
+# hospital and counts as saved. The receiving hospital is not simulated.
 
 import numpy as np
 import pandas as pd
@@ -88,12 +84,11 @@ def simulate_fixed_policy(
     q_fraction = average_shipment_quantity - q_floor
 
     for day in range(total_days):
-        # Inventory in bucket 0 expires at the start of the day.
+        # Bucket 0 expires at the start of the day, before issue.
         expiring_now = inventory[:, 0].copy()
         inventory[:, :-1] = inventory[:, 1:]
         inventory[:, -1] = 0
 
-        # Scheduled shipment.
         if day % 7 in ship_days:
             add = np.full(n_years, q_floor, dtype=np.int32)
             if q_fraction > 0:
@@ -102,14 +97,12 @@ def simulate_fixed_policy(
             if day >= WARMUP_DAYS:
                 received += add.sum()
 
-        # FEFO issue.
         remaining = demand[day].astype(np.int32).copy()
         for age_bucket in range(usable_days_at_receipt):
             take = np.minimum(inventory[:, age_bucket], remaining)
             inventory[:, age_bucket] -= take
             remaining -= take
 
-        # Local-accounting redistribution.
         if day >= WARMUP_DAYS and redistribution_efficiency > 0:
             at_risk = inventory[:, 0].copy()
             saved = np.floor(at_risk * redistribution_efficiency).astype(np.int32)
@@ -140,12 +133,9 @@ def find_minimum_wastage_policy(
     shortage_target_pct,
     redistribution_efficiency=0.0,
 ):
-    """
-    Search for the smallest average shipment quantity that meets the shortage-day target.
+    """Smallest mean shipment that keeps shortage days at or under the target.
 
-    The algorithm first establishes an upper bound, then uses bisection.
-    Fractional average shipment quantities are implemented stochastically:
-    e.g. q=4.3 means 4 units most deliveries and a 30% chance of a fifth unit.
+    A fractional size is stochastic. 4.3 means 4 units, and a fifth unit on 30% of deliveries.
     """
     base = max(0.05, mean_daily_demand * 7 / shipments_per_week)
     low = max(0.02, base * 0.15)
@@ -220,10 +210,7 @@ def policy(
 
 
 def exact_break_even_redistribution(scenario_name, shortage_target_pct):
-    """
-    Minimum redistribution efficiency whose modeled wastage is <= the
-    5-usable-day scenario at the same shortage/service target.
-    """
+    """Redistribution efficiency that matches 5-day wastage at the same service level."""
     target_wastage = policy(
         scenario_name, shortage_target_pct, 3, 5, 0.0
     )["wastage_pct"]
@@ -247,10 +234,6 @@ def exact_break_even_redistribution(scenario_name, shortage_target_pct):
 
     return high
 
-
-# -----------------------------
-# Generate results tables
-# -----------------------------
 
 full_rows = []
 figure1_rows = []
@@ -324,8 +307,7 @@ for scenario_name in SCENARIOS:
             })
 
 
-# Figure 5 uses the very-low-volume 99% service break-even as a fixed intervention
-# across 99%, 98%, and 96% service levels.
+# Figure 3 holds redistribution at the very-low-volume 99% break-even.
 very_low = "Very low (~1/day)"
 fixed_red = exact_break_even_redistribution(very_low, 1)
 
@@ -350,7 +332,6 @@ for target in SHORTAGE_TARGETS:
     })
 
 
-# Save tables
 pd.DataFrame(figure1_rows).to_csv(
     OUT / "Figure_1_data.csv", index=False
 )
